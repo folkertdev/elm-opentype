@@ -1,4 +1,4 @@
-module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, toInt)
+module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, fromInt, toInt)
 
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
@@ -9,6 +9,11 @@ import Bytes.Encode as Encode exposing (Encoder)
 type Number
     = Fixed Int
     | Integer Int
+
+
+fromInt : Int -> Number
+fromInt =
+    Integer
 
 
 toInt : Number -> Int

@@ -13,13 +13,6 @@ top =
     sizedIndex Dict.Top.decode
 
 
-
-{-
-   sizedIndex Decode.string
-       |> Decode.map (\_ -> [])
--}
-
-
 name : Decoder (List String)
 name =
     sizedIndex Decode.string
@@ -33,62 +26,25 @@ string =
 
 localSubRoutines : Decoder (List (List Segment))
 localSubRoutines =
-    sizedIndex Charstring.decodeAsParts
+    sizedIndex Charstring.decodeSegments
 
 
 charstring : Decoder (List Charstring)
 charstring =
-    sizedIndex (\_ -> Charstring.decode)
+    sizedIndex (\size -> Charstring.decode size { global = Array.empty, local = Nothing })
 
 
 charstringWithOptions : { global : Array (List Segment), local : Maybe (Array (List Segment)) } -> Decoder (List Charstring)
 charstringWithOptions subroutines =
-    sizedIndex (\size -> Charstring.decodeWithOptions size subroutines)
+    sizedIndex (\size -> Charstring.decode size subroutines)
 
 
 globalSubRoutines : Decoder (List (List Segment))
 globalSubRoutines =
-    sizedIndex Charstring.decodeAsParts
+    sizedIndex Charstring.decodeSegments
 
 
 
-{-
-      card16
-          |> Decode.andThen
-              (\count ->
-                  if Debug.log "global subroutines count" count == 0 then
-                      Decode.succeed []
-
-                  else
-                      offSize
-                          |> Decode.andThen
-                              (\offsetSize ->
-                                  exactly (count + 1) (offset offsetSize)
-                                      |> Decode.andThen
-                                          (\offsets ->
-                                              let
-                                                  _ =
-                                                      Debug.log "offsets" offsets
-
-                                                  deltas =
-                                                      List.map2 (\smaller larger -> larger - smaller) offsets (List.drop 1 offsets)
-                                              in
-                                              Decode.loop ( [], deltas ) globalSubroutinesHelp
-                                          )
-                              )
-              )
-
-
-   globalSubroutinesHelp : ( List Charstring, List Int ) -> Decoder (Step ( List Charstring, List Int ) (List Charstring))
-   globalSubroutinesHelp ( accum, remaining ) =
-       case remaining of
-           first :: rest ->
-               Decode.map (\new -> Loop ( new :: accum, rest )) (Charstring.decodeWithOptions { global = List.reverse accum, local = Nothing })
-
-           [] ->
-               Decode.succeed (Done (List.reverse accum))
-
--}
 -- Helpers
 
 
