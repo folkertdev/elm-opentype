@@ -25,7 +25,6 @@ import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charstring.Number as Number exposing (Number)
-import Deque exposing (Deque)
 import Utils exposing (exactly)
 
 
@@ -147,9 +146,9 @@ interpretSegment state ( bytesRemaining, segment, operations ) =
     Decode.loop
         { state =
             { state
-                | numbers = List.foldl Deque.pushBack state.numbers segment.arguments
+                | numbers = state.numbers ++ List.map Number.toInt segment.arguments
                 , current = Nothing
-                , length = Deque.length state.numbers + List.length segment.arguments
+                , length = List.length state.numbers + List.length segment.arguments
             }
         , bytesRemaining = bytesRemaining
         , operations = []
@@ -217,21 +216,21 @@ interpretStatementHelp state opcode newBytesRemaining =
                         _ =
                             Debug.log "decodeWithOptionsHelp operator failed" ( opcode, state.numbers )
                     in
-                    Decode.succeed ( newBytesRemaining, NoOp, { state | numbers = Deque.empty, current = Nothing } )
+                    Decode.succeed ( newBytesRemaining, NoOp, { state | numbers = [], current = Nothing } )
 
                 Just ( op, newState ) ->
                     Decode.succeed ( newBytesRemaining, op, newState )
 
 
-addNumberToDeque : Int -> State -> Decoder (Step State a)
-addNumberToDeque byte state =
+addNumberToList : Int -> State -> Decoder (Step State a)
+addNumberToList byte state =
     Number.decodeHelp byte
         |> Decode.andThen
             (\number ->
                 Decode.succeed
                     (Loop
                         { state
-                            | numbers = Deque.pushBack number state.numbers
+                            | numbers = state.numbers ++ [ Number.toInt number ]
                         }
                     )
             )
@@ -291,14 +290,14 @@ step state =
                 |> Decode.andThen
                     (\byte ->
                         if isNumberByte byte then
-                            addNumberToDeque byte state
+                            addNumberToList byte state
 
                         else
                             decodeOpcode byte
                                 |> Decode.andThen
                                     (decodeOperation
                                         { state
-                                            | length = Deque.length state.numbers
+                                            | length = List.length state.numbers
                                         }
                                     )
                     )
@@ -341,7 +340,7 @@ type Operation
 
 
 type alias State =
-    { numbers : Deque Number.Number
+    { numbers : List Int
     , numStems : Int
     , hstem : Int
     , vstem : Int
@@ -358,7 +357,7 @@ type alias State =
 
 initialState : State
 initialState =
-    { numbers = Deque.empty
+    { numbers = []
     , numStems = 0
     , hstem = 0
     , vstem = 0
@@ -371,39 +370,6 @@ initialState =
     , subroutines = Array.empty
     , width = Nothing
     }
-
-
-popFront1 : Deque Number.Number -> Maybe ( Int, Deque Number.Number )
-popFront1 deque =
-    case Deque.popFront deque of
-        ( Just number, d ) ->
-            Just ( Number.toInt number, d )
-
-        _ ->
-            Nothing
-
-
-popBack1 : Deque Number.Number -> Maybe ( Int, Deque Number.Number )
-popBack1 deque =
-    case Deque.popBack deque of
-        ( Just number, d ) ->
-            Just ( Number.toInt number, d )
-
-        _ ->
-            Nothing
-
-
-popFront2 : Deque Number.Number -> Maybe ( ( Int, Int ), Deque Number.Number )
-popFront2 deque =
-    popFront1 deque
-        |> Maybe.andThen
-            (\( first, newState ) ->
-                popFront1 newState
-                    |> Maybe.andThen
-                        (\( second, newerState ) ->
-                            Just ( ( first, second ), newerState )
-                        )
-            )
 
 
 call : Array (List Segment) -> Int -> State -> Maybe ( Operation, State )
@@ -441,30 +407,28 @@ call subroutines index state =
 
 mask : Int -> (List Int -> Operation) -> State -> Decoder (Result ( Int, Operation, State ) (Maybe ( Operation, State )))
 mask op toOperation state =
-    if not (Deque.isEmpty state.numbers) then
+    if not (List.isEmpty state.numbers) then
         -- handle implicit `vstem` operations
-        popFront2 state.numbers
-            |> Maybe.andThen
-                (\( ( dx, dStem ), newNumbers ) ->
-                    let
-                        x =
-                            state.vstem + dx
-                    in
-                    Just
-                        ( VStem x (x + dStem)
-                        , { state
-                            | numStems = 1 + state.numStems
-                            , vstem = x + dStem
-                            , current = Just op
-                            , numbers =
-                                -- TODO check thisnewNumbers
-                                -- Deque.empty
-                                newNumbers
-                          }
-                        )
-                )
-            |> Ok
-            |> Decode.succeed
+        case state.numbers of
+            dx :: dStem :: rest ->
+                let
+                    x =
+                        state.vstem + dx
+                in
+                Just
+                    ( VStem x (x + dStem)
+                    , { state
+                        | numStems = 1 + state.numStems
+                        , vstem = x + dStem
+                        , current = Just op
+                        , numbers = rest
+                      }
+                    )
+                    |> Ok
+                    |> Decode.succeed
+
+            _ ->
+                Decode.succeed (Ok Nothing)
 
     else
         let
@@ -486,72 +450,74 @@ mask op toOperation state =
 
 hstem : State -> Maybe ( Operation, State )
 hstem state =
-    if odd (Deque.length state.numbers) then
-        case popFront1 state.numbers of
-            Nothing ->
+    if odd (List.length state.numbers) then
+        case state.numbers of
+            width :: rest ->
+                Just ( Width width, { state | current = Just 1, numbers = rest } )
+
+            _ ->
                 Nothing
 
-            Just ( width, newNumbers ) ->
-                Just ( Width width, { state | current = Just 1, numbers = newNumbers } )
-
     else
-        popFront2 state.numbers
-            |> Maybe.andThen
-                (\( ( y, dy ), newNumbers ) ->
-                    let
-                        newY =
-                            state.hstem + y
-                    in
-                    Just
-                        ( HStem newY (newY + dy)
-                        , { state
-                            | numStems = state.numStems + 1
-                            , hstem = newY + dy
-                            , numbers = newNumbers
-                            , current =
-                                if not (Deque.isEmpty newNumbers) then
-                                    Just 1
+        case state.numbers of
+            y :: dy :: rest ->
+                let
+                    newY =
+                        state.hstem + y
+                in
+                Just
+                    ( HStem newY (newY + dy)
+                    , { state
+                        | numStems = state.numStems + 1
+                        , hstem = newY + dy
+                        , numbers = rest
+                        , current =
+                            if not (List.isEmpty rest) then
+                                Just 1
 
-                                else
-                                    Nothing
-                          }
-                        )
-                )
+                            else
+                                Nothing
+                      }
+                    )
+
+            _ ->
+                Nothing
 
 
 vstem : State -> Maybe ( Operation, State )
 vstem state =
-    if (Deque.length state.numbers |> modBy 2) /= 0 then
-        case popFront1 state.numbers of
-            Nothing ->
+    if odd (List.length state.numbers) then
+        case state.numbers of
+            width :: rest ->
+                Just ( Width width, { state | current = Just 3, numbers = rest } )
+
+            _ ->
                 Nothing
 
-            Just ( width, newNumbers ) ->
-                Just ( Width width, { state | current = Just 3, numbers = newNumbers } )
-
     else
-        popFront2 state.numbers
-            |> Maybe.andThen
-                (\( ( x, dx ), newNumbers ) ->
-                    let
-                        newX =
-                            state.vstem + x
-                    in
-                    Just
-                        ( VStem newX (newX + dx)
-                        , { state
-                            | numStems = state.numStems + 1
-                            , vstem = newX + dx
-                            , numbers = newNumbers
-                            , current =
-                                if not (Deque.isEmpty newNumbers) then
-                                    Just 3
+        case state.numbers of
+            x :: dx :: rest ->
+                let
+                    newX =
+                        state.vstem + x
+                in
+                Just
+                    ( VStem newX (newX + dx)
+                    , { state
+                        | numStems = state.numStems + 1
+                        , vstem = newX + dx
+                        , numbers = rest
+                        , current =
+                            if not (List.isEmpty rest) then
+                                Just 3
 
-                                else
-                                    Nothing
-                          }
-                        )
-                )
+                            else
+                                Nothing
+                      }
+                    )
+
+            _ ->
+                Nothing
 
 
 moveto state ( dx, dy ) newNumbers =
@@ -570,58 +536,63 @@ moveto state ( dx, dy ) newNumbers =
 
 
 movetoWidth state op =
-    popFront1 state.numbers
-        |> Maybe.map
-            (\( width, newNumbers ) ->
+    case state.numbers of
+        width :: rest ->
+            Just
                 ( Width width
                 , { state
                     | current = Just op
-                    , numbers = newNumbers
+                    , numbers = rest
                   }
                 )
-            )
+
+        _ ->
+            Nothing
 
 
 vmoveto : State -> Maybe ( Operation, State )
 vmoveto state =
-    if Deque.length state.numbers == 2 then
+    if List.length state.numbers == 2 then
         movetoWidth state 4
 
     else
-        popFront1 state.numbers
-            |> Maybe.andThen
-                (\( dy, newNumbers ) ->
-                    moveto state ( 0, dy ) newNumbers
-                )
+        case state.numbers of
+            dy :: rest ->
+                moveto state ( 0, dy ) rest
+
+            _ ->
+                Nothing
 
 
 hmoveto : State -> Maybe ( Operation, State )
 hmoveto state =
-    if Deque.length state.numbers == 2 then
+    if List.length state.numbers == 2 then
         movetoWidth state 22
 
     else
-        popFront1 state.numbers
-            |> Maybe.andThen
-                (\( dx, newNumbers ) ->
-                    moveto state ( dx, 0 ) newNumbers
-                )
+        case state.numbers of
+            dx :: rest ->
+                moveto state ( dx, 0 ) rest
+
+            _ ->
+                Nothing
 
 
 rmoveto : State -> Maybe ( Operation, State )
 rmoveto state =
-    if Deque.length state.numbers == 3 then
+    if List.length state.numbers == 3 then
         movetoWidth state 21
 
     else
-        popFront2 state.numbers
-            |> Maybe.andThen
-                (\( ( dx, dy ), newNumbers ) ->
-                    moveto state ( dx, dy ) newNumbers
-                )
+        case state.numbers of
+            dx :: dy :: rest ->
+                moveto state ( dx, dy ) rest
+
+            _ ->
+                Nothing
 
 
-lineto : Int -> State -> ( Int, Int ) -> Deque Number.Number -> ( Operation, State )
+lineto : Int -> State -> ( Int, Int ) -> List Int -> ( Operation, State )
 lineto op state ( dx, dy ) newNumbers =
     let
         newPoint =
@@ -634,7 +605,7 @@ lineto op state ( dx, dy ) newNumbers =
         | numbers = newNumbers
         , point = newPoint
         , current =
-            if Deque.isEmpty newNumbers then
+            if List.isEmpty newNumbers then
                 Nothing
 
             else
@@ -645,32 +616,38 @@ lineto op state ( dx, dy ) newNumbers =
 
 rlineto : Int -> State -> Maybe ( Operation, State )
 rlineto op state =
-    popFront2 state.numbers
-        |> Maybe.map
-            (\( ( dx, dy ), newNumbers ) ->
-                lineto op state ( dx, dy ) newNumbers
-            )
+    case state.numbers of
+        dx :: dy :: rest ->
+            lineto op state ( dx, dy ) rest
+                |> Just
+
+        _ ->
+            Nothing
 
 
 linetoX op state =
-    popFront1 state.numbers
-        |> Maybe.map
-            (\( dx, newNumbers ) ->
-                lineto op state ( dx, 0 ) newNumbers
-            )
+    case state.numbers of
+        dx :: rest ->
+            lineto op state ( dx, 0 ) rest
+                |> Just
+
+        _ ->
+            Nothing
 
 
 linetoY op state =
-    popFront1 state.numbers
-        |> Maybe.map
-            (\( dy, newNumbers ) ->
-                lineto op state ( 0, dy ) newNumbers
-            )
+    case state.numbers of
+        dy :: rest ->
+            lineto op state ( 0, dy ) rest
+                |> Just
+
+        _ ->
+            Nothing
 
 
 hlineto : State -> Maybe ( Operation, State )
 hlineto state =
-    if odd state.length == odd (Deque.length state.numbers) then
+    if odd state.length == odd (List.length state.numbers) then
         linetoX 6 state
 
     else
@@ -679,7 +656,7 @@ hlineto state =
 
 vlineto : State -> Maybe ( Operation, State )
 vlineto state =
-    if odd state.length == odd (Deque.length state.numbers) then
+    if odd state.length == odd (List.length state.numbers) then
         linetoY 7 state
 
     else
@@ -693,10 +670,10 @@ callsubr state =
     case state.local of
         Just local ->
             -- important difference with other operators is that the calls pop from the bottom/back of the stack
-            popBack1 state.numbers
+            unSnoc state.numbers
                 |> Maybe.andThen
-                    (\( index, newNumbers ) ->
-                        call local index { state | numbers = newNumbers }
+                    (\( index, previous ) ->
+                        call local index { state | numbers = previous }
                     )
 
         Nothing ->
@@ -704,10 +681,10 @@ callsubr state =
                 _ =
                     Debug.log "fail callsubr called but no local subrs" ()
             in
-            popBack1 state.numbers
+            unSnoc state.numbers
                 |> Maybe.andThen
-                    (\( index, newNumbers ) ->
-                        Just ( NoOp, { state | numbers = newNumbers } )
+                    (\( index, previous ) ->
+                        Just ( NoOp, { state | numbers = previous } )
                     )
 
 
@@ -715,7 +692,7 @@ callsubr state =
 -}
 callgsubr : State -> Maybe ( Operation, State )
 callgsubr state =
-    popBack1 state.numbers
+    unSnoc state.numbers
         |> Maybe.andThen
             (\( index, newNumbers ) ->
                 call state.global index { state | numbers = newNumbers }
@@ -723,7 +700,7 @@ callgsubr state =
 
 
 rcurveline state =
-    if Deque.length state.numbers == 2 then
+    if List.length state.numbers == 2 then
         rlineto 24 state
 
     else
@@ -731,7 +708,7 @@ rcurveline state =
 
 
 rlinecurve state =
-    if Deque.length state.numbers == 6 then
+    if List.length state.numbers == 6 then
         rrcurveto 25 state
 
     else
@@ -757,7 +734,7 @@ curvetoHelper op state rest ( newPoint, operation ) =
         ( operation
         , { state
             | point = newPoint
-            , numbers = Deque.fromList (List.map Number.fromInt rest)
+            , numbers = rest
             , current =
                 if List.isEmpty rest then
                     Nothing
@@ -770,7 +747,7 @@ curvetoHelper op state rest ( newPoint, operation ) =
 
 rrcurveto : Int -> State -> Maybe ( Operation, State )
 rrcurveto op state =
-    case List.map Number.toInt <| Deque.toList state.numbers of
+    case state.numbers of
         dx :: dy :: dx2 :: dy2 :: dx3 :: dy3 :: rest ->
             curveto state.point dx dy dx2 dy2 dx3 dy3
                 |> curvetoHelper op state rest
@@ -780,8 +757,8 @@ rrcurveto op state =
 
 
 vvcurveto state =
-    if odd (Deque.length state.numbers) then
-        case List.map Number.toInt <| Deque.toList state.numbers of
+    if odd (List.length state.numbers) then
+        case state.numbers of
             dx :: dy :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx dy dx2 dy2 0 d
                     |> curvetoHelper 26 state rest
@@ -790,7 +767,7 @@ vvcurveto state =
                 Nothing
 
     else
-        case List.map Number.toInt <| Deque.toList state.numbers of
+        case state.numbers of
             dy :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point 0 dy dx2 dy2 0 d
                     |> curvetoHelper 26 state rest
@@ -800,8 +777,8 @@ vvcurveto state =
 
 
 hhcurveto state =
-    if odd (Deque.length state.numbers) then
-        case List.map Number.toInt <| Deque.toList state.numbers of
+    if odd (List.length state.numbers) then
+        case state.numbers of
             dy :: dx :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx dy dx2 dy2 d 0
                     |> curvetoHelper 27 state rest
@@ -810,7 +787,7 @@ hhcurveto state =
                 Nothing
 
     else
-        case List.map Number.toInt <| Deque.toList state.numbers of
+        case state.numbers of
             dx :: dx2 :: dy2 :: d :: rest ->
                 curveto state.point dx 0 dx2 dy2 d 0
                     |> curvetoHelper 27 state rest
@@ -828,7 +805,7 @@ vhcurveto state =
     in
     Just
         ( Many (List.reverse curves)
-        , { state | numbers = Deque.empty, current = Nothing, point = cursor }
+        , { state | numbers = [], current = Nothing, point = cursor }
         )
 
 
@@ -893,7 +870,7 @@ vhGeneralCase state =
                         -- impossible
                         ( stack, cursor, accum )
     in
-    looper 0 state.point (List.map Number.toInt <| Deque.toList state.numbers) []
+    looper 0 state.point state.numbers []
 
 
 vhSpecialCase1 : State -> ( List Int, Point, List Operation ) -> ( List Int, Point, List Operation )
@@ -956,7 +933,7 @@ hvcurveto state =
     in
     Just
         ( Many (List.reverse curves)
-        , { state | numbers = Deque.empty, current = Nothing, point = cursor }
+        , { state | numbers = [], current = Nothing, point = cursor }
         )
 
 
@@ -1021,7 +998,7 @@ hvGeneralCase state =
                         -- impossible
                         ( stack, cursor, accum )
     in
-    looper 0 state.point (List.map Number.toInt <| Deque.toList state.numbers) []
+    looper 0 state.point state.numbers []
 
 
 hvSpecialCase1 : State -> ( List Int, Point, List Operation ) -> ( List Int, Point, List Operation )
@@ -1111,7 +1088,7 @@ operator code state =
             Just ( NoOp, state )
 
         14 ->
-            Just ( NoOp, { state | numbers = Deque.empty, current = Nothing } )
+            Just ( NoOp, { state | numbers = [], current = Nothing } )
 
         19 ->
             -- mask 19 HintMask state
@@ -1177,3 +1154,20 @@ last list =
 
         [] ->
             Nothing
+
+
+unSnoc : List a -> Maybe ( a, List a )
+unSnoc list =
+    let
+        go remainder accum =
+            case remainder of
+                [ x ] ->
+                    Just ( x, List.reverse accum )
+
+                [] ->
+                    Nothing
+
+                x :: xs ->
+                    go xs (x :: accum)
+    in
+    go list []
