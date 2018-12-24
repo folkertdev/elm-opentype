@@ -5,9 +5,15 @@ import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Bytes.Encode as Encode
 import CompactFontFormat
+import Glyphs exposing (Glyphs)
 import Html exposing (Html, button, div, table, td, text, tr)
 import Html.Events exposing (onClick)
 import Http
+import Path
+import Render
+import SubPath
+import Svg
+import Svg.Attributes exposing (fill, height, stroke, strokeWidth, transform, width)
 
 
 elmInjectionSize =
@@ -15,7 +21,7 @@ elmInjectionSize =
 
 
 type alias Model =
-    { count : Int, font : Maybe Font, cff : Maybe CompactFontFormat.CFF }
+    { count : Int, font : Maybe Font, cff : Maybe CompactFontFormat.Cff, glyphs : Maybe Glyphs }
 
 
 openSans : Cmd Msg
@@ -23,7 +29,10 @@ openSans =
     Http.request
         { method = "GET"
         , headers = [ Http.header "Accept-Ranges" "bytes" ]
-        , url = "../MontserratAlternates-Black.otf"
+        , url = "../SourceSansPro-It.otf"
+
+        --, url = "../MontserratAlternates-Black.otf"
+        --, url = "../Raleway-v4020-Regular.otf"
         , body = Http.emptyBody
         , expect = Http.expectBytesResponse OpenSans keepBytes
         , timeout = Nothing
@@ -43,7 +52,7 @@ keepBytes response =
 
 initialModel : Model
 initialModel =
-    { count = 0, font = Nothing, cff = Nothing }
+    { count = 0, font = Nothing, cff = Nothing, glyphs = Nothing }
 
 
 type alias Font =
@@ -186,28 +195,69 @@ update msg model =
 
         OpenSans (Ok bytes) ->
             let
+                targetedDecoder =
+                    (Decode.succeed (\_ a -> a)
+                        |> andMap (Decode.string 631)
+                        |> andMap offsetTableDecoder
+                    )
+                        |> Decode.andThen
+                            (\header ->
+                                Decode.succeed
+                                    (\records ->
+                                        { header = header
+                                        , records = records
+                                        }
+                                    )
+                                    |> andMap (tableRecordsDecoder header.numTables)
+                            )
+
                 file =
                     Decode.decode openFontDecoder bytes
 
+                t =
+                    Decode.decode targetedDecoder bytes
+
+                montserratOffset =
+                    11512 + elmInjectionSize
+
+                sourceSansProOffset =
+                    631 + 6284
+
                 cffDecoder =
                     Decode.map2 (\_ k -> k)
-                        (Decode.string <| 11512 + elmInjectionSize)
+                        (Decode.string <| sourceSansProOffset)
                         CompactFontFormat.decode
 
                 cff =
                     Decode.decode cffDecoder bytes
-                        |> Debug.log "cff"
 
-                dec =
-                    Decode.map2 (\_ k -> k)
-                        (Decode.string <| elmInjectionSize + 11512 + 26649)
-                        CompactFontFormat.charstring
+                glyphs =
+                    case cff of
+                        Just w ->
+                            CompactFontFormat.glyphs sourceSansProOffset bytes w 0
 
-                nGlyphs =
-                    Decode.decode dec bytes
-                        |> Debug.log "***************************************"
+                        Nothing ->
+                            let
+                                _ =
+                                    Debug.log "cff parsing failed, so no glyphs" ()
+                            in
+                            Nothing
+
+                {-
+                             dec =
+                                 Decode.map2 (\_ k -> k)
+                                     (Decode.string <| elmInjectionSize + 11512 + 26649)
+                                     CompactFontFormat.charstring
+
+                             nGlyphs =
+                                 Decode.decode dec bytes
+                                     |> Debug.log "***************************************"
+                   in
+                   ( { model | font = file, cff = cff }, Cmd.none )
+
+                -}
             in
-            ( { model | font = file, cff = cff }, Cmd.none )
+            ( { model | font = file, cff = cff, glyphs = glyphs }, Cmd.none )
 
 
 view : Model -> Browser.Document Msg
@@ -238,15 +288,60 @@ view model =
                     , table [] (List.map rec <| List.sortBy .offset font.records)
                     ]
         , div [] <|
-            case model.cff of
+            case model.glyphs of
                 Nothing ->
-                    []
+                    [ text "NOPE no glyphs" ]
 
-                Just compactFont ->
-                    [ text (Debug.toString compactFont)
+                Just glyphs ->
+                    -- a = 34
+                    let
+                        e =
+                            32
+
+                        l =
+                            39
+
+                        m =
+                            40
+                    in
+                    [ Svg.svg [ width "2000", height "1000" ]
+                        [ renderGlyph e glyphs 0
+                        , renderGlyph l glyphs 500
+                        , renderGlyph m glyphs 800
+                        ]
                     ]
         ]
     }
+
+
+renderGlyph index glyphs offset =
+    case Glyphs.charstring index glyphs of
+        Nothing ->
+            text ""
+
+        Just subroutine ->
+            let
+                _ =
+                    Debug.log "subroutine" subroutine
+
+                subpaths =
+                    Render.convert subroutine
+                        |> Debug.log "subpaths"
+            in
+            Path.element subpaths [ fill "none", stroke "black", strokeWidth "2", transform ("scale(1, -1)  translate(" ++ String.fromInt offset ++ ", -750)") ]
+
+
+
+--M205,69 C309,98 251,69 205,69 L355,154 C336,434 368,413 398,362 C118,314 205,434 299,434 C151,69 118,108 118,187
+{-
+
+   x =
+       [ MoveTo { x = 205, y = 69 }
+       , Many [ CurveTo { x = 151, y = 69 } { x = 118, y = 108 } { x = 118, y = 187 }, CurveTo { x = 118, y = 314 } { x = 205, y = 434 } { x = 299, y = 434 }, CurveTo { x = 336, y = 434 } { x = 368, y = 413 } { x = 398, y = 362 } ]
+       , LineTo { x = 355, y = 154 }
+       , CurveTo { x = 309, y = 98 } { x = 251, y = 69 } { x = 205, y = 69 }
+       ]
+-}
 
 
 main : Program () Model Msg

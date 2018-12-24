@@ -1,12 +1,24 @@
-module Charstring.Number exposing (Number(..), decode, decodeHelp)
+module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, toInt)
 
+import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder)
+import Bytes.Encode as Encode exposing (Encoder)
 
 
 type Number
     = Fixed Int
     | Integer Int
+
+
+toInt : Number -> Int
+toInt number =
+    case number of
+        Integer i ->
+            i
+
+        Fixed f ->
+            round (toFloat f / 65536.0)
 
 
 decode : Decoder Number
@@ -55,3 +67,36 @@ decodeHelp byte =
             else
                 -- unreachable, all of u8 is covered
                 Decode.fail
+
+
+encode : Int -> Encoder
+encode number =
+    if number >= -107 && number <= 107 then
+        Encode.unsignedInt8 (number + 139)
+
+    else if number >= 108 && number <= 1131 then
+        let
+            value =
+                number - 108
+        in
+        Encode.sequence
+            [ Encode.unsignedInt8 ((value // 256) + 247)
+            , Encode.unsignedInt8 (value |> modBy 256)
+            ]
+
+    else if number >= -1131 && number <= -108 then
+        let
+            value =
+                abs (number + 108)
+        in
+        Encode.sequence
+            [ Encode.unsignedInt8 ((value // 256) + 251)
+            , Encode.unsignedInt8 (value |> modBy 256)
+            ]
+
+    else
+        Encode.sequence
+            [ Encode.unsignedInt8 28
+            , Encode.unsignedInt8 (Bitwise.shiftRightBy 8 number)
+            , Encode.unsignedInt8 (Bitwise.and number 0xFF)
+            ]

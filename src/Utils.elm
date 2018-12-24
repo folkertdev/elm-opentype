@@ -1,4 +1,4 @@
-module Utils exposing (exactly, until, while)
+module Utils exposing (drop, exactly, keep, until, while)
 
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 
@@ -16,8 +16,9 @@ exactly tableCount decoder =
     Decode.loop ( tableCount, [] ) helper
 
 
-keep later first =
-    List.map2 (<|) first later
+keep : Decoder argument -> Decoder (argument -> result) -> Decoder result
+keep argument function =
+    Decode.map2 (<|) function argument
 
 
 drop : Decoder drop -> Decoder keep -> Decoder keep
