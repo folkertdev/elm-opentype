@@ -295,6 +295,9 @@ view model =
                 Just glyphs ->
                     -- a = 34
                     let
+                        f =
+                            33
+
                         e =
                             32
 
@@ -305,7 +308,7 @@ view model =
                             40
                     in
                     [ Svg.svg [ width "2000", height "1000" ]
-                        [ renderGlyph e glyphs 0
+                        [ renderGlyph f glyphs 0
                         , renderGlyph l glyphs 500
                         , renderGlyph m glyphs 800
                         ]

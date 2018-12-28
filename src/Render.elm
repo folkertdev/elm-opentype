@@ -15,6 +15,9 @@ convert operations =
         (MoveTo point) :: rest ->
             convertHelp rest (LowLevel.MoveTo (asFloats ( point.x, point.y ))) [] []
 
+        (Many many) :: rest ->
+            convert (many ++ rest)
+
         _ :: rest ->
             convert rest
 

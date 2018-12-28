@@ -1,10 +1,11 @@
-module Index exposing (OffsetSize, charstring, charstringWithOptions, globalSubRoutines, localSubRoutines, name, offSize, string, top)
+module Index exposing (OffsetSize, charstring, charstringWithOptions, name, offSize, string, subroutines, top)
 
 import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment)
+import Bytes.Encode as Encode
+import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment, Subroutines, initialSubroutines)
 import Dict.Top exposing (Top)
 
 
@@ -31,17 +32,44 @@ localSubRoutines =
 
 charstring : Decoder (List Charstring)
 charstring =
-    sizedIndex (\size -> Charstring.decode size { global = Array.empty, local = Nothing })
+    let
+        context =
+            { global = initialSubroutines
+            , local = Nothing
+            }
+    in
+    sizedIndex (\size -> Charstring.decode size context)
 
 
-charstringWithOptions : { global : Array (List Segment), local : Maybe (Array (List Segment)) } -> Decoder (List Charstring)
-charstringWithOptions subroutines =
-    sizedIndex (\size -> Charstring.decode size subroutines)
+charstringWithOptions : { global : Subroutines, local : Maybe Subroutines } -> Decoder (List Charstring)
+charstringWithOptions subs =
+    sizedIndex (\size -> Charstring.decode size subs)
 
 
-globalSubRoutines : Decoder (List (List Segment))
-globalSubRoutines =
-    sizedIndex Charstring.decodeSegments
+subroutines : Decoder Subroutines
+subroutines =
+    card16
+        |> Decode.andThen
+            (\count ->
+                if count == 0 then
+                    Decode.succeed initialSubroutines
+
+                else
+                    offSize
+                        |> Decode.andThen
+                            (\offsetSize ->
+                                exactly (count + 1) (offset offsetSize)
+                                    |> Decode.andThen
+                                        (\offsets ->
+                                            let
+                                                deltas =
+                                                    List.map2 (\small large -> large - small) offsets (List.drop 1 offsets)
+                                            in
+                                            mapM Decode.bytes deltas
+                                                |> Decode.map Array.fromList
+                                        )
+                            )
+            )
 
 
 
@@ -121,6 +149,21 @@ type OffsetSize
     | Bytes2
     | Bytes3
     | Bytes4
+
+
+offsetSizeInBytes s =
+    case s of
+        Bytes1 ->
+            1
+
+        Bytes2 ->
+            2
+
+        Bytes3 ->
+            3
+
+        Bytes4 ->
+            4
 
 
 offSize =
@@ -225,3 +268,15 @@ listStep decoder ( n, xs ) =
 
     else
         Decode.map (\x -> Loop ( n - 1, x :: xs )) decoder
+
+
+last l =
+    case l of
+        [ x ] ->
+            Just x
+
+        x :: xs ->
+            last xs
+
+        [] ->
+            Nothing

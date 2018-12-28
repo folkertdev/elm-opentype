@@ -1,11 +1,11 @@
-module CompactFontFormat exposing (Cff, decode, glyphs, parse, tryFirst)
+module CompactFontFormat exposing (Cff, decode, glyphs, parse)
 
 import Array exposing (Array)
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charset exposing (Charset)
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment)
+import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment, Subroutines)
 import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
@@ -36,7 +36,7 @@ type alias Cff =
     , names : List String
     , tops : Array Top
     , strings : List String
-    , subroutines : Array (List Segment)
+    , subroutines : Subroutines
     }
 
 
@@ -51,19 +51,7 @@ decode =
         |> keep Index.name
         |> keep (Decode.map Array.fromList Index.top)
         |> keep Index.string
-        |> keep (Decode.map Array.fromList Index.globalSubRoutines)
-
-
-tryFirst : Cff -> Maybe Charstring
-tryFirst cff =
-    case Array.get 0 cff.subroutines of
-        Nothing ->
-            Nothing
-
-        Just sub ->
-            -- Charstring.decodeWithOptions { global = cff.subroutines, local = Nothing } sub
-            -- TODO fix this
-            Nothing
+        |> keep Index.subroutines
 
 
 glyphs : Int -> Bytes -> Cff -> Int -> Maybe Glyphs

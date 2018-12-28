@@ -1,4 +1,4 @@
-module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, fromInt, toInt)
+module Charstring.Number exposing (Number(..), decode, decodeHelp, encode, fromInt, sizeFromFirstByte, toInt)
 
 import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
@@ -26,6 +26,33 @@ toInt number =
             round (toFloat f / 65536.0)
 
 
+{-| The size of a Number in bytes
+
+The size of a full number is known when reading its first byte
+
+-}
+sizeFromFirstByte : Int -> Int
+sizeFromFirstByte byte =
+    if byte == 28 then
+        3
+
+    else if byte == 255 then
+        5
+
+    else if byte >= 32 && byte <= 246 then
+        1
+
+    else if byte >= 247 && byte <= 254 then
+        2
+
+    else
+        let
+            _ =
+                Debug.log "invalid byte" byte
+        in
+        Debug.todo "crash"
+
+
 decode : Decoder Number
 decode =
     Decode.andThen decodeHelp Decode.unsignedInt8
@@ -48,25 +75,24 @@ decodeHelp byte =
 
             else if byte >= 247 && byte <= 250 then
                 Decode.unsignedInt8
-                    |> Decode.andThen
+                    |> Decode.map
                         (\low ->
                             let
                                 high =
                                     (byte - 247) * 256
                             in
-                            Decode.succeed (Integer (high + low + 108))
+                            Integer (high + low + 108)
                         )
 
             else if byte >= 251 && byte <= 254 then
                 Decode.unsignedInt8
-                    |> Decode.andThen
+                    |> Decode.map
                         (\low ->
                             let
                                 high =
                                     (byte - 251) * 256
                             in
-                            Decode.succeed
-                                (Integer (-high - low - 108))
+                            Integer (-high - low - 108)
                         )
 
             else

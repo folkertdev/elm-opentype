@@ -5,7 +5,7 @@ import Bitwise
 import Bytes exposing (Bytes, Endianness(..))
 import Bytes.Decode as Decode exposing (Decoder, Step(..))
 import Charset exposing (Charset)
-import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment)
+import Charstring.Internal as Charstring exposing (Charstring, Operation, Segment, Subroutines)
 import Dict exposing (Dict)
 import Dict.Private exposing (Private)
 import Dict.Top exposing (Top)
@@ -16,14 +16,15 @@ import Index exposing (OffsetSize)
 type alias Glyphs =
     { top : Top
     , private : Private
-    , subroutines : { global : Array (List Segment), local : Maybe (Array (List Segment)) }
+
+    -- , subroutines : { global : Array (List Segment), local : Maybe (Array (List Segment)) }
     , encodings : Encodings
     , charset : Charset
     , charstrings : Array Charstring
     }
 
 
-parse : Int -> Bytes -> Top -> Array (List Segment) -> Maybe Glyphs
+parse : Int -> Bytes -> Top -> Subroutines -> Maybe Glyphs
 parse offset bytes top global =
     parse2 offset bytes top global
 
@@ -75,14 +76,14 @@ parse offset bytes top global =
 -}
 
 
-parse2 : Int -> Bytes -> Top -> Array (List Segment) -> Maybe Glyphs
+parse2 : Int -> Bytes -> Top -> Subroutines -> Maybe Glyphs
 parse2 offset bytes top global =
     private offset top.private bytes
         |> Maybe.andThen
             (\( privateDict, localSubRoutines ) ->
                 let
                     _ =
-                        Debug.log "private decoded" ( Array.length global, Maybe.map Array.length localSubRoutines )
+                        Debug.log "private decoded" ( Array.length global, localSubRoutines )
 
                     decodeCharstrings : Maybe (List Charstring)
                     decodeCharstrings =
@@ -91,7 +92,13 @@ parse2 offset bytes top global =
                                 Debug.log "no charstrings in this top dict" Nothing
 
                             Just internalOffset ->
-                                decodeWithOffset (offset + internalOffset) (Index.charstringWithOptions { global = global, local = localSubRoutines }) bytes
+                                let
+                                    context =
+                                        { global = global
+                                        , local = localSubRoutines
+                                        }
+                                in
+                                decodeWithOffset (offset + internalOffset) (Index.charstringWithOptions context) bytes
 
                     decodeCharsetAndCharstrings =
                         case decodeCharstrings of
@@ -108,7 +115,8 @@ parse2 offset bytes top global =
                     constructor encoding ( charstrings, charset ) =
                         { top = top
                         , private = privateDict
-                        , subroutines = { global = global, local = localSubRoutines }
+
+                        -- , subroutines = { global = global, local = localSubRoutines }
                         , encodings = encoding
                         , charset = charset
                         , charstrings = Array.fromList charstrings
@@ -120,7 +128,7 @@ parse2 offset bytes top global =
             )
 
 
-private : Int -> Maybe { size : Int, offset : Int } -> Bytes -> Maybe ( Private, Maybe (Array (List Segment)) )
+private : Int -> Maybe { size : Int, offset : Int } -> Bytes -> Maybe ( Private, Maybe Subroutines )
 private globalOffset arguments bytes =
     case arguments of
         Just { size, offset } ->
@@ -145,7 +153,7 @@ private globalOffset arguments bytes =
                             Just ( privateDict, Nothing )
 
                         Just subroutineOffset ->
-                            case decodeWithOffset (start + subroutineOffset) Index.localSubRoutines bytes of
+                            case decodeWithOffset (start + subroutineOffset) Index.subroutines bytes of
                                 Nothing ->
                                     let
                                         _ =
@@ -153,12 +161,12 @@ private globalOffset arguments bytes =
                                     in
                                     Just ( privateDict, Nothing )
 
-                                Just subroutines ->
+                                Just localSubroutines ->
                                     let
                                         _ =
-                                            Debug.log "private decoded, with subs" (List.length subroutines)
+                                            Debug.log "private decoded, with subs" (Array.length localSubroutines)
                                     in
-                                    Just ( privateDict, Just (Array.fromList subroutines) )
+                                    Just ( privateDict, Just localSubroutines )
 
         Nothing ->
             Just ( Dict.Private.defaultPrivate, Nothing )
